@@ -1751,59 +1751,104 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   if (landingPageEl) landingPageEl.value = window.location.href;
 
   // ─────────────────────────────────────────────────────────────────────────
-  // OTP + Form Flow (single clean version — no legacy duplication)
+  // OTP + Form — proper state machine (all states explicit, no leaks)
   // ─────────────────────────────────────────────────────────────────────────
 
-  var form = document.getElementById('consultForm');
-  var COOLDOWN = 45;
-  var confirmationResult = null;
-  var mobileVerified = false;
+  var form           = document.getElementById('consultForm');
+  var COOLDOWN       = 45;
 
-  var sendOtpBtn     = document.getElementById('sendOtpBtn');
-  var inlineOtpPanel = document.getElementById('inlineOtpPanel');
-  var remainingFields= document.getElementById('remainingFields');
-  var verifiedBadge  = document.getElementById('mobileVerifiedBadge');
-  var otpErrorEl     = document.getElementById('otpError');
-  var otpResendBtn   = document.getElementById('otpResend');
-  var otpTimerEl     = document.getElementById('otpResendTimer');
-  var confirmBtn     = document.getElementById('otpVerifyBtn');
-  var changeBtn      = document.getElementById('otpChangeNumber');
-  var preSuccessFooter = document.getElementById('preSuccessFooter');
-  var successScreen  = document.getElementById('successScreen');
+  // Single source of truth — one object, all OTP state here
+  var otp = {
+    confirmationResult: null,
+    verified: false,
+    countdownTimer: null,
+    recaptchaVerifier: null
+  };
 
-  function showOtpError(msg) {
-    if (otpErrorEl) { otpErrorEl.textContent = msg; otpErrorEl.classList.add('is-visible'); }
+  // DOM refs
+  var $mobile        = document.getElementById('mobile');
+  var $sendBtn       = document.getElementById('sendOtpBtn');
+  var $otpPanel      = document.getElementById('inlineOtpPanel');
+  var $otpError      = document.getElementById('otpError');
+  var $otpDisplay    = document.getElementById('otpMobileDisplay');
+  var $resendBtn     = document.getElementById('otpResend');
+  var $timerEl       = document.getElementById('otpResendTimer');
+  var $confirmBtn    = document.getElementById('otpVerifyBtn');
+  var $changeBtn     = document.getElementById('otpChangeNumber');
+  var $badge         = document.getElementById('mobileVerifiedBadge');
+  var $fields        = document.getElementById('remainingFields');
+  var $successScreen = document.getElementById('successScreen');
+  var $preFooter     = document.getElementById('preSuccessFooter');
+  var $formError     = document.getElementById('formError');
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function showOtpErr(msg) {
+    if ($otpError) { $otpError.textContent = msg; $otpError.classList.add('is-visible'); }
   }
-  function clearOtpError() {
-    if (otpErrorEl) { otpErrorEl.textContent = ''; otpErrorEl.classList.remove('is-visible'); }
+  function clearOtpErr() {
+    if ($otpError) { $otpError.textContent = ''; $otpError.classList.remove('is-visible'); }
   }
 
   function showSuccessScreen() {
     if (form) form.style.display = 'none';
-    if (preSuccessFooter) preSuccessFooter.style.display = 'none';
-    if (successScreen) successScreen.classList.add('is-visible');
+    if ($preFooter) $preFooter.style.display = 'none';
+    if ($successScreen) $successScreen.classList.add('is-visible');
+  }
+
+  function clearDigits() {
+    document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
+  }
+
+  function getCode() {
+    return Array.from(document.querySelectorAll('#inlineOtpPanel .otp-digit'))
+      .map(function(d) { return d.value; }).join('');
   }
 
   function startCountdown() {
+    clearInterval(otp.countdownTimer);
     var secs = COOLDOWN;
-    if (otpResendBtn) otpResendBtn.disabled = true;
-    if (otpTimerEl) otpTimerEl.textContent = secs;
-    var t = setInterval(function() {
+    if ($resendBtn) { $resendBtn.disabled = true; $resendBtn.textContent = 'Resend in ' + secs + 's'; }
+    if ($timerEl) $timerEl.textContent = secs;
+    otp.countdownTimer = setInterval(function() {
       secs--;
-      if (otpTimerEl) otpTimerEl.textContent = secs;
+      if ($timerEl) $timerEl.textContent = secs;
+      if ($resendBtn) $resendBtn.textContent = 'Resend in ' + secs + 's';
       if (secs <= 0) {
-        clearInterval(t);
-        if (otpResendBtn) { otpResendBtn.disabled = false; otpResendBtn.textContent = 'Resend OTP'; }
+        clearInterval(otp.countdownTimer);
+        if ($resendBtn) { $resendBtn.disabled = false; $resendBtn.textContent = 'Resend OTP'; }
       }
     }, 1000);
   }
 
-  function sendOtp(phoneE164) {
-    if (!window.__firebaseReady) {
-      showOtpError('OTP service not ready. Please WhatsApp us instead.');
-      return Promise.reject(new Error('firebase-not-ready'));
+  function resetToNumberEntry() {
+    // Full reset — mobile field editable, OTP panel hidden, all state cleared
+    clearInterval(otp.countdownTimer);
+    otp.confirmationResult = null;
+    otp.verified = false;
+    if (otp.recaptchaVerifier) {
+      try { otp.recaptchaVerifier.clear(); } catch(e) {}
+      otp.recaptchaVerifier = null;
     }
-    // Firebase requires a DOM element for invisible reCAPTCHA — create one if missing
+    if ($mobile) {
+      $mobile.readOnly = false;
+      $mobile.removeAttribute('readonly');
+      $mobile.disabled = false;
+      $mobile.value = '';
+      setTimeout(function() { $mobile.focus(); }, 100);
+    }
+    if ($sendBtn) { $sendBtn.disabled = false; $sendBtn.textContent = 'Verify'; }
+    if ($otpPanel) $otpPanel.style.display = 'none';
+    clearDigits();
+    clearOtpErr();
+  }
+
+  function sendOtp(phoneE164, onSent, onFail) {
+    // Always create fresh verifier — never reuse stale ones
+    if (otp.recaptchaVerifier) {
+      try { otp.recaptchaVerifier.clear(); } catch(e) {}
+      otp.recaptchaVerifier = null;
+    }
     var container = document.getElementById('recaptcha-container');
     if (!container) {
       container = document.createElement('div');
@@ -1811,157 +1856,207 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       container.style.display = 'none';
       document.body.appendChild(container);
     }
-    // Always reset verifier to avoid stale state between sends
-    if (window.__rcv) { try { window.__rcv.clear(); } catch(e) {} window.__rcv = null; }
-    window.__rcv = new window.__firebaseRecaptchaVerifier(
-      window.__firebaseAuth, 'recaptcha-container', { size: 'invisible' }
-    );
-    return window.__firebaseSignInWithPhoneNumber(
-      window.__firebaseAuth, phoneE164, window.__rcv
-    ).then(function(cr) { confirmationResult = cr; });
+    if (!window.__firebaseReady) {
+      onFail(new Error('Firebase not configured'));
+      return;
+    }
+    try {
+      otp.recaptchaVerifier = new window.__firebaseRecaptchaVerifier(
+        window.__firebaseAuth, 'recaptcha-container', { size: 'invisible' }
+      );
+      window.__firebaseSignInWithPhoneNumber(
+        window.__firebaseAuth, phoneE164, otp.recaptchaVerifier
+      ).then(function(cr) {
+        otp.confirmationResult = cr;
+        onSent();
+      }).catch(function(err) {
+        console.error('[OTP send error]', err.code, err.message);
+        onFail(err);
+      });
+    } catch(err) {
+      console.error('[OTP verifier error]', err.message);
+      onFail(err);
+    }
   }
 
-  // Auto-advance OTP digit boxes
+  // ── OTP digit auto-advance ─────────────────────────────────────────────────
+
   (function() {
-    var digits = Array.prototype.slice.call(document.querySelectorAll('#inlineOtpPanel .otp-digit'));
+    var digits = Array.from(document.querySelectorAll('#inlineOtpPanel .otp-digit'));
     digits.forEach(function(el, idx) {
       el.addEventListener('input', function() {
         el.value = el.value.replace(/[^0-9]/g, '').slice(-1);
         if (el.value && idx < digits.length - 1) digits[idx + 1].focus();
       });
       el.addEventListener('keydown', function(e) {
-        if (e.key === 'Backspace' && !el.value && idx > 0) digits[idx - 1].focus();
+        if (e.key === 'Backspace') {
+          if (el.value) {
+            el.value = '';
+          } else if (idx > 0) {
+            digits[idx - 1].value = '';
+            digits[idx - 1].focus();
+          }
+          e.preventDefault();
+        }
       });
       el.addEventListener('paste', function(e) {
         e.preventDefault();
         var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
         digits.forEach(function(d, i) { d.value = text[i] || ''; });
         var next = digits.findIndex(function(d) { return !d.value; });
-        digits[next === -1 ? 5 : next].focus();
+        digits[next === -1 ? digits.length - 1 : next].focus();
       });
     });
   })();
 
-  // Verify button — send OTP
-  if (sendOtpBtn) {
-    sendOtpBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      if (!mobileInput || !/^[0-9]{10}$/.test(mobileInput.value.trim())) {
-        if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
-        showOtpError('Please enter a valid 10-digit mobile number.');
+  // ── Verify button (send OTP) ────────────────────────────────────────────────
+
+  if ($sendBtn) {
+    $sendBtn.addEventListener('click', function() {
+      var num = $mobile ? $mobile.value.trim() : '';
+      if (!/^[0-9]{10}$/.test(num)) {
+        if ($otpPanel) $otpPanel.style.display = 'block';
+        showOtpErr('Please enter a valid 10-digit mobile number.');
         return;
       }
-      var phoneE164 = '+91' + mobileInput.value.trim();
-      if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
-      var displayEl = document.getElementById('otpMobileDisplay');
-      if (displayEl) displayEl.textContent = phoneE164;
-      clearOtpError();
-      mobileInput.readOnly = true;
-      sendOtpBtn.disabled = true;
-      sendOtpBtn.textContent = 'Sent ✓';
-      startCountdown();
-      sendOtp(phoneE164).then(function() {
-        var first = document.querySelector('#inlineOtpPanel .otp-digit');
-        if (first) first.focus();
-      }).catch(function(err) {
-        console.error('[otp] send failed:', err);
-        showOtpError('Could not send OTP. Please try again.');
-        mobileInput.readOnly = false;
-        sendOtpBtn.disabled = false;
-        sendOtpBtn.textContent = 'Verify';
-      });
-    });
-  }
+      var phoneE164 = '+91' + num;
+      // Lock mobile field
+      if ($mobile) { $mobile.readOnly = true; $mobile.setAttribute('readonly', 'readonly'); }
+      $sendBtn.disabled = true;
+      $sendBtn.textContent = 'Sending...';
+      clearOtpErr();
 
-  // Resend button
-  if (otpResendBtn) {
-    otpResendBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      if (!mobileInput) return;
-      clearOtpError();
-      // Clear digit boxes
-      document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
-      otpResendBtn.disabled = true;
-      otpResendBtn.textContent = 'Sending...';
-      startCountdown();
-      sendOtp('+91' + mobileInput.value.trim()).catch(function() {
-        showOtpError('Could not resend. Please try again.');
-        otpResendBtn.disabled = false;
-        otpResendBtn.textContent = 'Resend OTP';
-      });
-    });
-  }
-
-  // Change number button
-  if (changeBtn) {
-    changeBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      if (mobileInput) { mobileInput.readOnly = false; mobileInput.value = ''; mobileInput.focus(); }
-      if (sendOtpBtn) { sendOtpBtn.disabled = false; sendOtpBtn.textContent = 'Verify'; }
-      if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
-      clearOtpError();
-    });
-  }
-
-  // Confirm OTP button
-  if (confirmBtn) {
-    confirmBtn.addEventListener('click', function() {
-      var digits = document.querySelectorAll('#inlineOtpPanel .otp-digit');
-      var code = Array.from(digits).map(function(d) { return d.value; }).join('');
-      clearOtpError();
-      if (code.length !== 6) { showOtpError('Please enter all 6 digits.'); return; }
-      if (!confirmationResult) { showOtpError('Session expired. Please click Verify again.'); return; }
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Verifying...';
-      confirmationResult.confirm(code).then(function() {
-        mobileVerified = true;
-        if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
-        if (verifiedBadge) verifiedBadge.style.display = 'block';
-        if (remainingFields) {
-          remainingFields.style.opacity = '1';
-          remainingFields.style.pointerEvents = 'auto';
+      sendOtp(phoneE164,
+        function onSent() {
+          $sendBtn.textContent = 'Sent ✓';
+          if ($otpPanel) $otpPanel.style.display = 'block';
+          if ($otpDisplay) $otpDisplay.textContent = phoneE164;
+          startCountdown();
+          var first = document.querySelector('#inlineOtpPanel .otp-digit');
+          if (first) setTimeout(function() { first.focus(); }, 100);
+        },
+        function onFail(err) {
+          var msg = 'Could not send OTP. ';
+          if (err.code === 'auth/too-many-requests') msg += 'Too many attempts. Please wait and try again.';
+          else if (err.code === 'auth/invalid-phone-number') msg += 'Invalid phone number.';
+          else if (err.code === 'auth/billing-not-enabled') msg += 'Service not available. Please WhatsApp us.';
+          else msg += 'Please try again.';
+          if ($otpPanel) $otpPanel.style.display = 'block';
+          showOtpErr(msg);
+          if ($mobile) { $mobile.readOnly = false; $mobile.removeAttribute('readonly'); }
+          $sendBtn.disabled = false;
+          $sendBtn.textContent = 'Verify';
         }
-        var cityField = document.getElementById('city');
-        if (cityField) cityField.focus();
-      }).catch(function() {
-        document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Confirm OTP ✓';
-        showOtpError('The OTP you entered was wrong. Please try again.');
+      );
+    });
+  }
+
+  // ── Resend button ───────────────────────────────────────────────────────────
+
+  if ($resendBtn) {
+    $resendBtn.addEventListener('click', function() {
+      var num = $mobile ? $mobile.value.trim() : '';
+      if (!num) return;
+      var phoneE164 = '+91' + num;
+      // Reset state before resend
+      otp.confirmationResult = null;
+      clearDigits();
+      clearOtpErr();
+      $resendBtn.disabled = true;
+      $resendBtn.textContent = 'Sending...';
+
+      sendOtp(phoneE164,
+        function onSent() {
+          startCountdown();
+          var first = document.querySelector('#inlineOtpPanel .otp-digit');
+          if (first) setTimeout(function() { first.focus(); }, 100);
+        },
+        function onFail(err) {
+          console.error('[Resend failed]', err.code, err.message);
+          showOtpErr('Could not resend OTP. Please try again.');
+          $resendBtn.disabled = false;
+          $resendBtn.textContent = 'Resend OTP';
+        }
+      );
+    });
+  }
+
+  // ── Change number button ────────────────────────────────────────────────────
+
+  if ($changeBtn) {
+    $changeBtn.addEventListener('click', function() {
+      resetToNumberEntry();
+    });
+  }
+
+  // ── Confirm OTP button ──────────────────────────────────────────────────────
+
+  if ($confirmBtn) {
+    $confirmBtn.addEventListener('click', function() {
+      clearOtpErr();
+      var code = getCode();
+      if (code.length !== 6) { showOtpErr('Please enter all 6 digits.'); return; }
+      if (!otp.confirmationResult) { showOtpErr('Session expired. Click Verify again.'); return; }
+
+      $confirmBtn.disabled = true;
+      $confirmBtn.textContent = 'Verifying...';
+
+      otp.confirmationResult.confirm(code).then(function() {
+        otp.verified = true;
+        if ($otpPanel) $otpPanel.style.display = 'none';
+        if ($badge) $badge.style.display = 'block';
+        if ($fields) { $fields.style.opacity = '1'; $fields.style.pointerEvents = 'auto'; }
+        var city = document.getElementById('city');
+        if (city) setTimeout(function() { city.focus(); }, 100);
+      }).catch(function(err) {
+        console.error('[OTP confirm error]', err.code, err.message);
+        // Reset digits and verifier so resend works cleanly
+        clearDigits();
+        otp.confirmationResult = null;
+        if (otp.recaptchaVerifier) {
+          try { otp.recaptchaVerifier.clear(); } catch(e) {}
+          otp.recaptchaVerifier = null;
+        }
+        $confirmBtn.disabled = false;
+        $confirmBtn.textContent = 'Confirm OTP ✓';
+        showOtpErr('Wrong OTP. Please try again or click Resend OTP.');
       });
     });
   }
 
-  // Form submit — only fires after OTP verified
+  // ── Form submit ─────────────────────────────────────────────────────────────
+
   if (form) {
     form.addEventListener('submit', function(e) {
       e.preventDefault();
+
       var fullName   = document.getElementById('fullName');
       var mobile     = document.getElementById('mobile');
       var city       = document.getElementById('city');
       var debtAmount = document.getElementById('debtAmount');
-      var errorEl    = document.getElementById('formError');
-      var submitBtn  = document.getElementById('remainingFields') &&
-                       document.querySelector('#remainingFields .submit-btn');
+      var submitBtn  = form.querySelector('#remainingFields .submit-btn');
 
+      // Validate
       var valid = fullName && fullName.value.trim().length > 1
                && mobile  && /^[0-9]{10}$/.test(mobile.value.trim())
                && city    && city.value
                && debtAmount && debtAmount.value;
 
+      if ($formError) $formError.style.display = 'none';
+
       if (!valid) {
-        if (errorEl) { errorEl.textContent = 'Please fill in all required fields.'; errorEl.style.display = 'block'; }
+        if ($formError) { $formError.textContent = 'Please fill in all required fields.'; $formError.style.display = 'block'; }
         return;
       }
-      if (!mobileVerified) {
-        if (errorEl) { errorEl.textContent = 'Please verify your mobile number first.'; errorEl.style.display = 'block'; }
+      if (!otp.verified) {
+        if ($formError) { $formError.textContent = 'Please verify your mobile number first.'; $formError.style.display = 'block'; }
         return;
       }
-      if (errorEl) errorEl.style.display = 'none';
+
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting...'; }
 
       var debtTypeEls = form.querySelectorAll('input[name="debtType[]"]:checked');
-      var debtType = Array.prototype.map.call(debtTypeEls, function(el) { return el.value; });
+      var debtType = Array.from(debtTypeEls).map(function(el) { return el.value; });
 
       var payload = {
         fullName: fullName.value.trim(),
@@ -1970,7 +2065,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         city: city.value,
         debtAmount: debtAmount.value,
         debtType: debtType,
-        'bot-field': (form.querySelector('[name="bot-field"]') || {}).value || '',
+        'bot-field': '',
         utm_source: attribution.utm_source || '',
         utm_medium: attribution.utm_medium || '',
         utm_campaign: attribution.utm_campaign || '',
@@ -1988,20 +2083,25 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      .then(function(res) { return res.json().then(function(json) { return { status: res.status, json: json }; }); })
+      .then(function(res) {
+        return res.json().then(function(json) { return { status: res.status, json: json }; });
+      })
       .then(function(result) {
+        console.log('[lead submit]', result.status, result.json);
         if (result.json && result.json.ok) {
           showSuccessScreen();
           form.reset();
           if (typeof gtag === 'function') gtag('event', 'generate_lead', { event_category: 'engagement', event_label: attribution.utm_source || 'direct' });
-          if (typeof fbq === 'function') fbq('track', 'Lead', { utm_source: attribution.utm_source || 'direct' });
+          if (typeof fbq === 'function') fbq('track', 'Lead');
         } else {
-          if (errorEl) { errorEl.textContent = (result.json && result.json.error) || 'Something went wrong. Please WhatsApp us.'; errorEl.style.display = 'block'; }
+          var errMsg = (result.json && result.json.error) || 'Something went wrong. Please WhatsApp us.';
+          if ($formError) { $formError.textContent = errMsg; $formError.style.display = 'block'; }
           if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
         }
       })
-      .catch(function() {
-        if (errorEl) { errorEl.textContent = 'Network error. Please WhatsApp us directly.'; errorEl.style.display = 'block'; }
+      .catch(function(err) {
+        console.error('[lead submit error]', err);
+        if ($formError) { $formError.textContent = 'Network error. Please WhatsApp us directly.'; $formError.style.display = 'block'; }
         if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
       });
     });
@@ -2010,7 +2110,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   // Form Started tracking
   if (form) {
     var formStartedFired = false;
-    form.addEventListener('focusin', function(){
+    form.addEventListener('focusin', function() {
       if (formStartedFired) return;
       formStartedFired = true;
       if (typeof gtag === 'function') gtag('event', 'form_started', { event_category: 'engagement', event_label: 'consultation_form' });
