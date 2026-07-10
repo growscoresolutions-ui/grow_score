@@ -29,8 +29,10 @@ function getSheetsClient() {
 
 // ---------- reCAPTCHA v3 server-side verification ----------
 async function verifyRecaptcha(token) {
-  if (!process.env.RECAPTCHA_SECRET_KEY) return { ok: true, score: null }; // skip if not configured yet
-  if (!token) return { ok: false, score: 0 };
+  // reCAPTCHA not configured — skip check entirely
+  if (!process.env.RECAPTCHA_SECRET_KEY) return { ok: true, score: null };
+  // No token sent — skip (recaptcha removed from frontend)
+  if (!token) return { ok: true, score: null };
 
   const res = await fetch('https://www.google.com/recaptcha/api/siteverify', {
     method: 'POST',
@@ -38,7 +40,6 @@ async function verifyRecaptcha(token) {
     body: `secret=${process.env.RECAPTCHA_SECRET_KEY}&response=${token}`
   });
   const data = await res.json();
-  // 0.5 is Google's recommended default threshold. Tune later based on real traffic.
   return { ok: data.success && data.score >= 0.5, score: data.score };
 }
 
