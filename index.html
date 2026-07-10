@@ -2006,20 +2006,16 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     });
   }
 
-    // ---------- Form Started tracking (fires once, on first interaction) ----------
+  // Form Started tracking
+  if (form) {
     var formStartedFired = false;
     form.addEventListener('focusin', function(){
       if (formStartedFired) return;
       formStartedFired = true;
-      if (typeof gtag === 'function') {
-        gtag('event', 'form_started', { event_category: 'engagement', event_label: 'consultation_form' });
-      }
-      if (typeof fbq === 'function') {
-        fbq('trackCustom', 'FormStarted');
-      }
+      if (typeof gtag === 'function') gtag('event', 'form_started', { event_category: 'engagement', event_label: 'consultation_form' });
+      if (typeof fbq === 'function') fbq('trackCustom', 'FormStarted');
     });
   }
-
 
   // ---------- 3. WhatsApp click tracking + attribution-aware message ----------
   var whatsappBtn = document.getElementById('whatsappBtn');
