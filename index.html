@@ -1235,7 +1235,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
               </div>
               <div class="otp-actions" style="margin-bottom:10px;">
                 <button type="button" class="otp-change-number" id="otpChangeNumber">Change number</button>
-                <button type="button" class="otp-resend" id="otpResend" disabled>Resend in <span id="otpResendTimer">30</span>s</button>
+                <button type="button" class="otp-resend" id="otpResend" disabled>Resend in <span id="otpResendTimer">45</span>s</button>
               </div>
               <button type="button" class="submit-btn" id="otpVerifyBtn" style="margin-bottom:8px;">Confirm OTP ✓</button>
               <div id="recaptcha-container"></div>
@@ -1753,7 +1753,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   if (landingPageEl) landingPageEl.value = window.location.href;
 
   // ---------- OTP verification helpers (Firebase Phone Auth) ----------
-  var RESEND_COOLDOWN_SECONDS = 30;
+  var RESEND_COOLDOWN_SECONDS = 45;
   var MAX_RESEND_ATTEMPTS = 3;
   var OTP_EXPIRY_MS = 5 * 60 * 1000;
 
@@ -1813,14 +1813,8 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       if (remaining <= 0) {
         clearInterval(otpState.resendTimerId);
         if (otpResendBtn) {
-          var attemptsLeft = MAX_RESEND_ATTEMPTS - otpState.resendCount;
-          if (attemptsLeft > 0) {
-            otpResendBtn.disabled = false;
-            otpResendBtn.textContent = 'Resend code';
-          } else {
-            otpResendBtn.disabled = true;
-            otpResendBtn.textContent = 'No more resends available';
-          }
+          otpResendBtn.disabled = false;
+          otpResendBtn.textContent = 'Resend OTP';
         }
       }
     }, 1000);
@@ -1914,8 +1908,6 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
   if (otpResendBtn) {
     otpResendBtn.addEventListener('click', function(){
-      if (otpState.resendCount >= MAX_RESEND_ATTEMPTS) return;
-      otpState.resendCount += 1;
       clearOtpError();
       clearOtpDigits();
       otpResendBtn.disabled = true;
@@ -1923,9 +1915,9 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       sendOtp(otpState.phoneE164).then(function(){
         startResendCooldown();
       }).catch(function(){
-        showOtpError('Could not resend the code. Please try again shortly.');
+        showOtpError('Could not resend the code. Please try again.');
         otpResendBtn.disabled = false;
-        otpResendBtn.textContent = 'Resend code';
+        otpResendBtn.textContent = 'Resend OTP';
       });
     });
   }
@@ -1965,8 +1957,11 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         if (typeof otpState.onVerified === 'function') otpState.onVerified();
       }).catch(function(err){
         console.error('[otp] verify failed:', err);
+        // Clear all digit boxes automatically
+        clearOtpDigits();
         resetOtpVerifyButton();
-        showOtpError('That code was incorrect. Please check it and try again.');
+        // Show red error message
+        showOtpError('The OTP you entered was wrong. Please try again.');
       });
     });
   }
