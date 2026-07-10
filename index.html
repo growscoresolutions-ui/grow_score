@@ -1225,12 +1225,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
               <p class="otp-sub" style="margin-bottom:10px;">Enter the 6-digit code sent to <strong id="otpMobileDisplay"></strong></p>
               <p class="otp-error" id="otpError" role="alert" aria-live="polite"></p>
               <div class="otp-digits" role="group" aria-label="6-digit verification code" style="margin-bottom:10px;">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 1">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 2">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 3">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 4">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 5">
-                <input type="tel" inputmode="numeric" maxlength="1" class="otp-digit" aria-label="Digit 6">
+                <input type="tel" inputmode="numeric" maxlength="6" id="otpSingleInput" class="otp-single-input" autocomplete="one-time-code" placeholder="Enter 6-digit OTP" style="width:100%;padding:14px;font-size:1.4rem;letter-spacing:8px;text-align:center;background:rgba(255,255,255,0.07);border:1.5px solid rgba(63,216,238,0.3);border-radius:10px;color:#fff;outline:none;" aria-label="6-digit OTP code">
               </div>
               <div class="otp-actions" style="margin-bottom:10px;">
                 <button type="button" class="otp-change-number" id="otpChangeNumber">Change number</button>
@@ -1276,7 +1271,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
                 </div>
               </div>
 
-              <button type="submit" class="submit-btn">Schedule My Free Consultation</button>
+              <button type="submit" id="formSubmitBtn" class="submit-btn">Schedule My Free Consultation</button>
               <p class="form-error" id="formError" style="display:none;color:#ff8080;font-size:13px;margin-top:10px;" role="alert" aria-live="polite">Please fill in all required fields.</p>
             </div>
 
@@ -1797,12 +1792,13 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   }
 
   function clearDigits() {
-    document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
+    var inp = document.getElementById('otpSingleInput');
+    if (inp) inp.value = '';
   }
 
   function getCode() {
-    return Array.from(document.querySelectorAll('#inlineOtpPanel .otp-digit'))
-      .map(function(d) { return d.value; }).join('');
+    var inp = document.getElementById('otpSingleInput');
+    return inp ? inp.value.trim() : '';
   }
 
   function startCountdown() {
@@ -1879,33 +1875,24 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     }
   }
 
-  // ── OTP digit auto-advance ─────────────────────────────────────────────────
+  // ── OTP single input — works with Android/iOS autofill ───────────────────
 
   (function() {
-    var digits = Array.from(document.querySelectorAll('#inlineOtpPanel .otp-digit'));
-    digits.forEach(function(el, idx) {
-      el.addEventListener('input', function() {
-        el.value = el.value.replace(/[^0-9]/g, '').slice(-1);
-        if (el.value && idx < digits.length - 1) digits[idx + 1].focus();
-      });
-      el.addEventListener('keydown', function(e) {
-        if (e.key === 'Backspace') {
-          if (el.value) {
-            el.value = '';
-          } else if (idx > 0) {
-            digits[idx - 1].value = '';
-            digits[idx - 1].focus();
-          }
-          e.preventDefault();
-        }
-      });
-      el.addEventListener('paste', function(e) {
-        e.preventDefault();
-        var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
-        digits.forEach(function(d, i) { d.value = text[i] || ''; });
-        var next = digits.findIndex(function(d) { return !d.value; });
-        digits[next === -1 ? digits.length - 1 : next].focus();
-      });
+    var inp = document.getElementById('otpSingleInput');
+    if (!inp) return;
+    inp.addEventListener('input', function() {
+      inp.value = inp.value.replace(/[^0-9]/g, '').slice(0, 6);
+      if (inp.value.length === 6 && confirmBtn) {
+        setTimeout(function() { confirmBtn.click(); }, 300);
+      }
+    });
+    inp.addEventListener('paste', function(e) {
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '').slice(0, 6);
+      inp.value = text;
+      if (text.length === 6 && confirmBtn) {
+        setTimeout(function() { confirmBtn.click(); }, 300);
+      }
     });
   })();
 
@@ -1932,8 +1919,8 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           if ($otpPanel) $otpPanel.style.display = 'block';
           if ($otpDisplay) $otpDisplay.textContent = phoneE164;
           startCountdown();
-          var first = document.querySelector('#inlineOtpPanel .otp-digit');
-          if (first) setTimeout(function() { first.focus(); }, 100);
+          var otpInp = document.getElementById('otpSingleInput');
+          if (otpInp) setTimeout(function() { otpInp.focus(); }, 100);
         },
         function onFail(err) {
           var msg = 'Could not send OTP. ';
@@ -1968,8 +1955,8 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       sendOtp(phoneE164,
         function onSent() {
           startCountdown();
-          var first = document.querySelector('#inlineOtpPanel .otp-digit');
-          if (first) setTimeout(function() { first.focus(); }, 100);
+          var otpInp = document.getElementById('otpSingleInput');
+          if (otpInp) setTimeout(function() { otpInp.focus(); }, 100);
         },
         function onFail(err) {
           console.error('[Resend failed]', err.code, err.message);
@@ -2034,7 +2021,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       var mobile     = document.getElementById('mobile');
       var city       = document.getElementById('city');
       var debtAmount = document.getElementById('debtAmount');
-      var submitBtn  = form.querySelector('#remainingFields .submit-btn');
+      var submitBtn  = document.getElementById('formSubmitBtn');
 
       // Validate
       var valid = fullName && fullName.value.trim().length > 1
@@ -2172,7 +2159,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   });
 
   // ---------- CTA click tracking (any element marked data-cta) ----------
-  document.querySelectorAll('[data-cta], .submit-btn, .whatsapp-btn').forEach(function(el){
+  document.querySelectorAll('[data-cta], .whatsapp-btn').forEach(function(el){
     el.addEventListener('click', function(){
       var label = el.getAttribute('data-cta') || el.textContent.trim().slice(0, 40);
       if (typeof gtag === 'function') {
