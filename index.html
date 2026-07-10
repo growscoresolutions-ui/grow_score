@@ -1750,458 +1750,217 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   var landingPageEl = document.getElementById('landing_page');
   if (landingPageEl) landingPageEl.value = window.location.href;
 
-  // ---------- OTP verification helpers (Firebase Phone Auth) ----------
-  var RESEND_COOLDOWN_SECONDS = 45;
-  var MAX_RESEND_ATTEMPTS = 3;
-  var OTP_EXPIRY_MS = 5 * 60 * 1000;
+  // ─────────────────────────────────────────────────────────────────────────
+  // OTP + Form Flow (single clean version — no legacy duplication)
+  // ─────────────────────────────────────────────────────────────────────────
 
-  var otpState = {
-    confirmationResult: null,
-    resendCount: 0,
-    resendTimerId: null,
-    expiryTimerId: null,
-    submitBtn: null,
-    onVerified: null,
-    phoneE164: ''
-  };
+  var COOLDOWN = 45;
+  var confirmationResult = null;
+  var mobileVerified = false;
 
-  var otpPanel = document.getElementById('otpPanel');
-  var otpDigits = otpPanel ? Array.prototype.slice.call(otpPanel.querySelectorAll('.otp-digit')) : [];
-  var otpErrorEl = document.getElementById('otpError');
-  var otpMobileDisplay = document.getElementById('otpMobileDisplay');
-  var otpResendBtn = document.getElementById('otpResend');
-  var otpResendTimerEl = document.getElementById('otpResendTimer');
-  var otpVerifyBtn = document.getElementById('otpVerifyBtn');
-  var otpChangeNumberBtn = document.getElementById('otpChangeNumber');
+  var sendOtpBtn     = document.getElementById('sendOtpBtn');
+  var inlineOtpPanel = document.getElementById('inlineOtpPanel');
+  var remainingFields= document.getElementById('remainingFields');
+  var verifiedBadge  = document.getElementById('mobileVerifiedBadge');
+  var otpErrorEl     = document.getElementById('otpError');
+  var otpResendBtn   = document.getElementById('otpResend');
+  var otpTimerEl     = document.getElementById('otpResendTimer');
+  var confirmBtn     = document.getElementById('otpVerifyBtn');
+  var changeBtn      = document.getElementById('otpChangeNumber');
   var preSuccessFooter = document.getElementById('preSuccessFooter');
-  var successScreen = document.getElementById('successScreen');
+  var successScreen  = document.getElementById('successScreen');
 
-  function showOtpError(msg){
-    if (!otpErrorEl) return;
-    otpErrorEl.textContent = msg;
-    otpErrorEl.classList.add('is-visible');
+  function showOtpError(msg) {
+    if (otpErrorEl) { otpErrorEl.textContent = msg; otpErrorEl.classList.add('is-visible'); }
   }
-  function clearOtpError(){
-    if (!otpErrorEl) return;
-    otpErrorEl.textContent = '';
-    otpErrorEl.classList.remove('is-visible');
+  function clearOtpError() {
+    if (otpErrorEl) { otpErrorEl.textContent = ''; otpErrorEl.classList.remove('is-visible'); }
   }
 
-  function resetOtpVerifyButton(){
-    if (otpVerifyBtn) { otpVerifyBtn.disabled = false; otpVerifyBtn.textContent = 'Verify & Submit'; }
-  }
-
-  function showSuccessScreen(){
-    if (otpPanel) otpPanel.classList.remove('is-visible');
+  function showSuccessScreen() {
     if (form) form.style.display = 'none';
     if (preSuccessFooter) preSuccessFooter.style.display = 'none';
     if (successScreen) successScreen.classList.add('is-visible');
-    clearTimeout(otpState.expiryTimerId);
-    clearInterval(otpState.resendTimerId);
   }
 
-  function startResendCooldown(){
-    var remaining = RESEND_COOLDOWN_SECONDS;
+  function startCountdown() {
+    var secs = COOLDOWN;
     if (otpResendBtn) otpResendBtn.disabled = true;
-    if (otpResendTimerEl) otpResendTimerEl.textContent = remaining;
-    clearInterval(otpState.resendTimerId);
-    otpState.resendTimerId = setInterval(function(){
-      remaining -= 1;
-      if (otpResendTimerEl) otpResendTimerEl.textContent = remaining;
-      if (remaining <= 0) {
-        clearInterval(otpState.resendTimerId);
-        if (otpResendBtn) {
-          otpResendBtn.disabled = false;
-          otpResendBtn.textContent = 'Resend OTP';
-        }
+    if (otpTimerEl) otpTimerEl.textContent = secs;
+    var t = setInterval(function() {
+      secs--;
+      if (otpTimerEl) otpTimerEl.textContent = secs;
+      if (secs <= 0) {
+        clearInterval(t);
+        if (otpResendBtn) { otpResendBtn.disabled = false; otpResendBtn.textContent = 'Resend OTP'; }
       }
     }, 1000);
   }
 
-  function startExpiryTimer(){
-    clearTimeout(otpState.expiryTimerId);
-    otpState.expiryTimerId = setTimeout(function(){
-      showOtpError('This code has expired. Please request a new one.');
-      otpState.confirmationResult = null;
-    }, OTP_EXPIRY_MS);
-  }
-
-  function getOtpCode(){
-    return otpDigits.map(function(el){ return el.value; }).join('');
-  }
-  function clearOtpDigits(){
-    otpDigits.forEach(function(el){ el.value = ''; });
-    if (otpDigits[0]) otpDigits[0].focus();
-  }
-
-  // Auto-advance focus across the 6 boxes, support paste, and backspace-to-previous.
-  otpDigits.forEach(function(el, idx){
-    el.addEventListener('input', function(){
-      el.value = el.value.replace(/[^0-9]/g, '').slice(0, 1);
-      if (el.value && idx < otpDigits.length - 1) otpDigits[idx + 1].focus();
-    });
-    el.addEventListener('keydown', function(e){
-      if (e.key === 'Backspace' && !el.value && idx > 0) otpDigits[idx - 1].focus();
-    });
-    el.addEventListener('paste', function(e){
-      var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
-      if (!text) return;
-      e.preventDefault();
-      for (var i = 0; i < otpDigits.length; i++) otpDigits[i].value = text[i] || '';
-      var nextEmpty = otpDigits.findIndex(function(d){ return !d.value; });
-      (otpDigits[nextEmpty === -1 ? otpDigits.length - 1 : nextEmpty]).focus();
-    });
-  });
-
-  function sendOtp(phoneE164){
+  function sendOtp(phoneE164) {
     if (!window.__firebaseReady) {
-      showOtpError('OTP verification is not configured yet. Please WhatsApp us instead.');
-      return Promise.reject(new Error('firebase-not-configured'));
+      showOtpError('OTP service not ready. Please WhatsApp us instead.');
+      return Promise.reject(new Error('firebase-not-ready'));
     }
-    try {
-      if (!window.__recaptchaVerifierInstance) {
-        window.__recaptchaVerifierInstance = new window.__firebaseRecaptchaVerifier(
-          window.__firebaseAuth, 'recaptcha-container', { size: 'invisible' }
-        );
-      }
-      return window.__firebaseSignInWithPhoneNumber(
-        window.__firebaseAuth, phoneE164, window.__recaptchaVerifierInstance
-      ).then(function(confirmationResult){
-        otpState.confirmationResult = confirmationResult;
-        startExpiryTimer();
-        return confirmationResult;
-      });
-    } catch (err) {
-      return Promise.reject(err);
+    // Firebase requires a DOM element for invisible reCAPTCHA — create one if missing
+    var container = document.getElementById('recaptcha-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'recaptcha-container';
+      container.style.display = 'none';
+      document.body.appendChild(container);
     }
+    // Always reset verifier to avoid stale state between sends
+    if (window.__rcv) { try { window.__rcv.clear(); } catch(e) {} window.__rcv = null; }
+    window.__rcv = new window.__firebaseRecaptchaVerifier(
+      window.__firebaseAuth, 'recaptcha-container', { size: 'invisible' }
+    );
+    return window.__firebaseSignInWithPhoneNumber(
+      window.__firebaseAuth, phoneE164, window.__rcv
+    ).then(function(cr) { confirmationResult = cr; });
   }
 
-  function startOtpFlow(localMobile, submitBtn, onVerified){
-    var phoneE164 = '+91' + localMobile; // form already validates a 10-digit Indian mobile
-    otpState.submitBtn = submitBtn;
-    otpState.onVerified = onVerified;
-    otpState.phoneE164 = phoneE164;
-    otpState.resendCount = 0;
-    clearOtpError();
-    clearOtpDigits();
+  // Auto-advance OTP digit boxes
+  (function() {
+    var digits = Array.prototype.slice.call(document.querySelectorAll('#inlineOtpPanel .otp-digit'));
+    digits.forEach(function(el, idx) {
+      el.addEventListener('input', function() {
+        el.value = el.value.replace(/[^0-9]/g, '').slice(-1);
+        if (el.value && idx < digits.length - 1) digits[idx + 1].focus();
+      });
+      el.addEventListener('keydown', function(e) {
+        if (e.key === 'Backspace' && !el.value && idx > 0) digits[idx - 1].focus();
+      });
+      el.addEventListener('paste', function(e) {
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
+        digits.forEach(function(d, i) { d.value = text[i] || ''; });
+        var next = digits.findIndex(function(d) { return !d.value; });
+        digits[next === -1 ? 5 : next].focus();
+      });
+    });
+  })();
 
-    sendOtp(phoneE164).then(function(){
-      if (otpMobileDisplay) otpMobileDisplay.textContent = phoneE164;
-      if (otpPanel) otpPanel.classList.add('is-visible');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.style.display = 'none'; }
-      startResendCooldown();
-      if (otpDigits[0]) otpDigits[0].focus();
-    }).catch(function(err){
-      console.error('[otp] send failed:', err);
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
-      var errorEl = document.getElementById('formError');
-      if (errorEl) {
-        errorEl.textContent = window.__firebaseReady
-          ? 'Could not send the verification code. Please check the number and try again.'
-          : 'OTP verification is not configured yet. Please WhatsApp us directly.';
-        errorEl.style.display = 'block';
+  // Verify button — send OTP
+  if (sendOtpBtn) {
+    sendOtpBtn.addEventListener('click', function() {
+      var mobileInput = document.getElementById('mobile');
+      if (!mobileInput || !/^[0-9]{10}$/.test(mobileInput.value.trim())) {
+        if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
+        showOtpError('Please enter a valid 10-digit mobile number.');
+        return;
       }
+      var phoneE164 = '+91' + mobileInput.value.trim();
+      if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
+      var displayEl = document.getElementById('otpMobileDisplay');
+      if (displayEl) displayEl.textContent = phoneE164;
+      clearOtpError();
+      mobileInput.readOnly = true;
+      sendOtpBtn.disabled = true;
+      sendOtpBtn.textContent = 'Sent ✓';
+      startCountdown();
+      sendOtp(phoneE164).then(function() {
+        var first = document.querySelector('#inlineOtpPanel .otp-digit');
+        if (first) first.focus();
+      }).catch(function(err) {
+        console.error('[otp] send failed:', err);
+        showOtpError('Could not send OTP. Please try again.');
+        mobileInput.readOnly = false;
+        sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = 'Verify';
+      });
     });
   }
 
+  // Resend button
   if (otpResendBtn) {
-    otpResendBtn.addEventListener('click', function(){
+    otpResendBtn.addEventListener('click', function() {
+      var mobileInput = document.getElementById('mobile');
+      if (!mobileInput) return;
       clearOtpError();
-      clearOtpDigits();
+      // Clear digit boxes
+      document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
       otpResendBtn.disabled = true;
       otpResendBtn.textContent = 'Sending...';
-      sendOtp(otpState.phoneE164).then(function(){
-        startResendCooldown();
-      }).catch(function(){
-        showOtpError('Could not resend the code. Please try again.');
+      startCountdown();
+      sendOtp('+91' + mobileInput.value.trim()).catch(function() {
+        showOtpError('Could not resend. Please try again.');
         otpResendBtn.disabled = false;
         otpResendBtn.textContent = 'Resend OTP';
       });
     });
   }
 
-  if (otpChangeNumberBtn) {
-    otpChangeNumberBtn.addEventListener('click', function(){
-      if (otpPanel) otpPanel.classList.remove('is-visible');
-      clearInterval(otpState.resendTimerId);
-      clearTimeout(otpState.expiryTimerId);
-      if (otpState.submitBtn) {
-        otpState.submitBtn.style.display = '';
-        otpState.submitBtn.disabled = false;
-        otpState.submitBtn.textContent = 'Schedule My Free Consultation';
-      }
-      var mobileField = document.getElementById('mobile');
-      if (mobileField) mobileField.focus();
+  // Change number button
+  if (changeBtn) {
+    changeBtn.addEventListener('click', function() {
+      var mobileInput = document.getElementById('mobile');
+      if (mobileInput) { mobileInput.readOnly = false; mobileInput.value = ''; mobileInput.focus(); }
+      if (sendOtpBtn) { sendOtpBtn.disabled = false; sendOtpBtn.textContent = 'Verify'; }
+      if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
+      clearOtpError();
     });
   }
 
-  if (otpVerifyBtn) {
-    otpVerifyBtn.addEventListener('click', function(){
-      var code = getOtpCode();
+  // Confirm OTP button
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', function() {
+      var digits = document.querySelectorAll('#inlineOtpPanel .otp-digit');
+      var code = Array.from(digits).map(function(d) { return d.value; }).join('');
       clearOtpError();
-      if (code.length !== 6) {
-        showOtpError('Enter the full 6-digit code.');
-        return;
-      }
-      if (!otpState.confirmationResult) {
-        showOtpError('This code has expired. Please request a new one.');
-        return;
-      }
-      otpVerifyBtn.disabled = true;
-      otpVerifyBtn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>Verifying...';
-      otpState.confirmationResult.confirm(code).then(function(){
-        clearInterval(otpState.resendTimerId);
-        clearTimeout(otpState.expiryTimerId);
-        if (typeof otpState.onVerified === 'function') otpState.onVerified();
-      }).catch(function(err){
-        console.error('[otp] verify failed:', err);
-        // Clear all digit boxes automatically
-        clearOtpDigits();
-        resetOtpVerifyButton();
-        // Show red error message
+      if (code.length !== 6) { showOtpError('Please enter all 6 digits.'); return; }
+      if (!confirmationResult) { showOtpError('Session expired. Please click Verify again.'); return; }
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Verifying...';
+      confirmationResult.confirm(code).then(function() {
+        mobileVerified = true;
+        if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
+        if (verifiedBadge) verifiedBadge.style.display = 'block';
+        if (remainingFields) {
+          remainingFields.style.opacity = '1';
+          remainingFields.style.pointerEvents = 'auto';
+        }
+        var cityField = document.getElementById('city');
+        if (cityField) cityField.focus();
+      }).catch(function() {
+        document.querySelectorAll('#inlineOtpPanel .otp-digit').forEach(function(d) { d.value = ''; });
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Confirm OTP ✓';
         showOtpError('The OTP you entered was wrong. Please try again.');
       });
     });
   }
 
-  // ---------- 2. Form validation + submit via /api/lead ----------
-  // ── Inline OTP: Verify button next to mobile field ──────────────────────
-  var sendOtpBtn      = document.getElementById('sendOtpBtn');
-  var inlineOtpPanel  = document.getElementById('inlineOtpPanel');
-
-  // ── Inline OTP digit auto-advance ────────────────────────────────────
-  (function() {
-    var inlineDigits = Array.prototype.slice.call(
-      document.querySelectorAll('#inlineOtpPanel .otp-digit')
-    );
-    inlineDigits.forEach(function(el, idx) {
-      // Auto-advance to next box on input
-      el.addEventListener('input', function() {
-        el.value = el.value.replace(/[^0-9]/g, '').slice(-1); // numbers only
-        if (el.value && idx < inlineDigits.length - 1) {
-          inlineDigits[idx + 1].focus();
-        }
-        // Auto-submit if all 6 filled
-        var code = inlineDigits.map(function(d){ return d.value; }).join('');
-        if (code.length === 6) {
-          var confirmBtn = document.getElementById('otpVerifyBtn');
-          if (confirmBtn) confirmBtn.focus();
-        }
-      });
-      // Backspace goes to previous box
-      el.addEventListener('keydown', function(e) {
-        if (e.key === 'Backspace' && !el.value && idx > 0) {
-          inlineDigits[idx - 1].focus();
-        }
-      });
-      // Handle paste — spreads across all 6 boxes
-      el.addEventListener('paste', function(e) {
-        e.preventDefault();
-        var text = (e.clipboardData || window.clipboardData)
-          .getData('text').replace(/[^0-9]/g, '');
-        inlineDigits.forEach(function(d, i) {
-          d.value = text[i] || '';
-        });
-        var nextEmpty = inlineDigits.findIndex(function(d){ return !d.value; });
-        if (nextEmpty === -1) {
-          inlineDigits[5].focus();
-        } else {
-          inlineDigits[nextEmpty].focus();
-        }
-      });
-    });
-  })();
-  var remainingFields = document.getElementById('remainingFields');
-  var verifiedBadge   = document.getElementById('mobileVerifiedBadge');
-  var mobileVerified  = false;
-
-  // Resend countdown for inline panel
-  function startInlineCountdown() {
-    var timerEl = document.getElementById('otpResendTimer');
-    var resendBtn = document.getElementById('otpResend');
-    var seconds = 30;
-    if (resendBtn) { resendBtn.disabled = true; }
-    var interval = setInterval(function() {
-      seconds--;
-      if (timerEl) timerEl.textContent = seconds;
-      if (seconds <= 0) {
-        clearInterval(interval);
-        if (resendBtn) {
-          resendBtn.disabled = false;
-          resendBtn.textContent = 'Resend OTP';
-        }
-      }
-    }, 1000);
-  }
-
-  if (sendOtpBtn) {
-    sendOtpBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      var otpErrEl = document.getElementById('otpError');
-
-      if (!mobileInput || !/^[0-9]{10}$/.test(mobileInput.value.trim())) {
-        if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
-        if (otpErrEl) otpErrEl.textContent = 'Please enter a valid 10-digit mobile number.';
-        return;
-      }
-
-      var phoneE164 = '+91' + mobileInput.value.trim();
-
-      // Show OTP panel
-      if (inlineOtpPanel) inlineOtpPanel.style.display = 'block';
-      if (otpErrEl) otpErrEl.textContent = '';
-
-      var display = document.getElementById('otpMobileDisplay');
-      if (display) display.textContent = phoneE164;
-
-      // Lock mobile field and button
-      mobileInput.readOnly = true;
-      sendOtpBtn.disabled = true;
-      sendOtpBtn.textContent = 'Sent ✓';
-
-      // Start countdown
-      startInlineCountdown();
-
-      // Send OTP via Firebase
-      sendOtp(phoneE164).then(function() {
-        console.log('[otp] sent to', phoneE164);
-        // Focus first digit box
-        var firstDigit = document.querySelector('#inlineOtpPanel .otp-digit');
-        if (firstDigit) firstDigit.focus();
-      }).catch(function(err) {
-        console.error('[otp] send failed:', err);
-        if (otpErrEl) otpErrEl.textContent = 'Could not send OTP. Check your number and try again.';
-        // Reset button so they can retry
-        mobileInput.readOnly = false;
-        sendOtpBtn.disabled = false;
-        sendOtpBtn.textContent = 'Verify';
-      });
-    });
-  }
-
-  // Resend button inside inline panel
-  var inlineResendBtn = document.getElementById('otpResend');
-  if (inlineResendBtn) {
-    inlineResendBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      if (!mobileInput) return;
-      var phoneE164 = '+91' + mobileInput.value.trim();
-      inlineResendBtn.disabled = true;
-      inlineResendBtn.textContent = 'Resend in 30s';
-      startInlineCountdown();
-      sendOtp(phoneE164).catch(function(err) {
-        console.error('[otp] resend failed:', err);
-      });
-    });
-  }
-
-  // Change number button — reset everything
-  var inlineChangeBtn = document.getElementById('otpChangeNumber');
-  if (inlineChangeBtn) {
-    inlineChangeBtn.addEventListener('click', function() {
-      var mobileInput = document.getElementById('mobile');
-      if (mobileInput) {
-        mobileInput.readOnly = false;
-        mobileInput.value = '';
-        mobileInput.focus();
-      }
-      if (sendOtpBtn) {
-        sendOtpBtn.disabled = false;
-        sendOtpBtn.textContent = 'Verify';
-      }
-      if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
-    });
-  }
-
-  // Confirm OTP button inside inline panel
-  var inlineConfirmBtn = document.getElementById('otpVerifyBtn');
-  if (inlineConfirmBtn) {
-    inlineConfirmBtn.addEventListener('click', function() {
-      var otpErrEl = document.getElementById('otpError');
-      var digits = document.querySelectorAll('#inlineOtpPanel .otp-digit');
-      var code = Array.from(digits).map(function(d) { return d.value; }).join('');
-
-      if (code.length !== 6) {
-        if (otpErrEl) otpErrEl.textContent = 'Please enter all 6 digits.';
-        return;
-      }
-
-      inlineConfirmBtn.disabled = true;
-      inlineConfirmBtn.textContent = 'Verifying...';
-      if (otpErrEl) otpErrEl.textContent = '';
-
-      // Verify via Firebase confirmationResult
-      if (otpState && otpState.confirmationResult) {
-        otpState.confirmationResult.confirm(code).then(function() {
-          // OTP confirmed — unlock remaining fields
-          mobileVerified = true;
-          if (inlineOtpPanel) inlineOtpPanel.style.display = 'none';
-          if (verifiedBadge) verifiedBadge.style.display = 'block';
-          if (remainingFields) {
-            remainingFields.style.opacity = '1';
-            remainingFields.style.pointerEvents = 'auto';
-          }
-          // Scroll to city field
-          var cityField = document.getElementById('city');
-          if (cityField) cityField.focus();
-        }).catch(function(err) {
-          console.error('[otp] confirm failed:', err);
-          if (otpErrEl) otpErrEl.textContent = 'Incorrect OTP. Please try again.';
-          inlineConfirmBtn.disabled = false;
-          inlineConfirmBtn.textContent = 'Confirm OTP ✓';
-        });
-      } else {
-        // Fallback if Firebase not ready — for testing without Firebase
-        if (otpErrEl) otpErrEl.textContent = 'OTP service not ready. Please refresh and try again.';
-        inlineConfirmBtn.disabled = false;
-        inlineConfirmBtn.textContent = 'Confirm OTP ✓';
-      }
-    });
-  }
-
-  var form = document.getElementById('consultForm');
+  // Form submit — only fires after OTP verified
   if (form) {
-    form.addEventListener('submit', function(e){
-      e.preventDefault(); // always intercept now -- we POST via fetch, not a native form submit
-
-      var fullName = document.getElementById('fullName');
-      var mobile = document.getElementById('mobile');
-      var city = document.getElementById('city');
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var fullName   = document.getElementById('fullName');
+      var mobile     = document.getElementById('mobile');
+      var city       = document.getElementById('city');
       var debtAmount = document.getElementById('debtAmount');
-      var errorEl = document.getElementById('formError');
-      var successEl = document.getElementById('formSuccess');
-      var submitBtn = form.querySelector('.submit-btn');
+      var errorEl    = document.getElementById('formError');
+      var submitBtn  = document.getElementById('remainingFields') &&
+                       document.querySelector('#remainingFields .submit-btn');
 
-      var mobileOk = mobile && /^[0-9]{10}$/.test(mobile.value.trim());
       var valid = fullName && fullName.value.trim().length > 1
-        && mobileOk
-        && city && city.value
-        && debtAmount && debtAmount.value;
-
-      if (successEl) successEl.style.display = 'none';
+               && mobile  && /^[0-9]{10}$/.test(mobile.value.trim())
+               && city    && city.value
+               && debtAmount && debtAmount.value;
 
       if (!valid) {
-        if (errorEl) errorEl.style.display = 'block';
-        if (!mobileOk && mobile) mobile.focus();
-        return false;
+        if (errorEl) { errorEl.textContent = 'Please fill in all required fields.'; errorEl.style.display = 'block'; }
+        return;
       }
-
-      // Block submit if mobile OTP not yet verified
       if (!mobileVerified) {
-        if (errorEl) {
-          errorEl.textContent = 'Please verify your mobile number with the OTP first.';
-          errorEl.style.display = 'block';
-        }
-        return false;
+        if (errorEl) { errorEl.textContent = 'Please verify your mobile number first.'; errorEl.style.display = 'block'; }
+        return;
       }
-
       if (errorEl) errorEl.style.display = 'none';
-
-      var tsEl = document.getElementById('submitted_at');
-      if (tsEl) tsEl.value = new Date().toISOString();
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting...'; }
 
       var debtTypeEls = form.querySelectorAll('input[name="debtType[]"]:checked');
-      var debtType = Array.prototype.map.call(debtTypeEls, function(el){ return el.value; });
+      var debtType = Array.prototype.map.call(debtTypeEls, function(el) { return el.value; });
 
       var payload = {
         fullName: fullName.value.trim(),
@@ -2223,40 +1982,29 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         submitted_at: new Date().toISOString()
       };
 
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Submitting...'; }
-
       fetch('/api/lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-        .then(function(res){ return res.json().then(function(json){ return { status: res.status, json: json }; }); })
-        .then(function(result){
-          if (result.json && result.json.ok) {
-            showSuccessScreen();
-            form.reset();
-            if (typeof gtag === 'function') {
-              gtag('event', 'generate_lead', { event_category: 'engagement', event_label: attribution.utm_source || 'direct' });
-            }
-            if (typeof fbq === 'function') {
-              fbq('track', 'Lead', { utm_source: attribution.utm_source || 'direct' });
-            }
-          } else {
-            if (errorEl) {
-              errorEl.textContent = (result.json && result.json.error) || 'Something went wrong. Please try again or WhatsApp us.';
-              errorEl.style.display = 'block';
-            }
-            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
-          }
-        })
-        .catch(function(){
-          if (errorEl) {
-            errorEl.textContent = 'Network error. Please check your connection or WhatsApp us directly.';
-            errorEl.style.display = 'block';
-          }
+      .then(function(res) { return res.json().then(function(json) { return { status: res.status, json: json }; }); })
+      .then(function(result) {
+        if (result.json && result.json.ok) {
+          showSuccessScreen();
+          form.reset();
+          if (typeof gtag === 'function') gtag('event', 'generate_lead', { event_category: 'engagement', event_label: attribution.utm_source || 'direct' });
+          if (typeof fbq === 'function') fbq('track', 'Lead', { utm_source: attribution.utm_source || 'direct' });
+        } else {
+          if (errorEl) { errorEl.textContent = (result.json && result.json.error) || 'Something went wrong. Please WhatsApp us.'; errorEl.style.display = 'block'; }
           if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
-        });
+        }
+      })
+      .catch(function() {
+        if (errorEl) { errorEl.textContent = 'Network error. Please WhatsApp us directly.'; errorEl.style.display = 'block'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Schedule My Free Consultation'; }
+      });
     });
+  }
 
     // ---------- Form Started tracking (fires once, on first interaction) ----------
     var formStartedFired = false;
