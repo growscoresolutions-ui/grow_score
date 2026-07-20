@@ -2060,6 +2060,27 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         submitted_at: new Date().toISOString()
       };
 
+      // Fire-and-forget: push lead into DealClosure CRM via webhook.
+      // Runs independently of the main /api/lead save below, so a CRM failure
+      // never blocks the user's submission or success screen.
+      try {
+        fetch('https://us-central1-dealclosure-crm.cloudfunctions.net/dealConverterCrmWebhook?webhookId=dT182wf45HxCc70VhMad', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contact_name: fullName.value.trim(),
+            mailing_city: city.value,
+            mobile: mobile.value.trim(),
+            type_of_debt: debtType.join(', '),
+            total_debt_amount: debtAmount.value
+          })
+        }).catch(function(crmErr) {
+          console.error('[CRM webhook error]', crmErr);
+        });
+      } catch (crmEx) {
+        console.error('[CRM webhook exception]', crmEx);
+      }
+
       fetch('/api/lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
