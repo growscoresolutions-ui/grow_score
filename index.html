@@ -2108,10 +2108,9 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       .then(function(result) {
         console.log('[lead submit]', result.status, result.json);
         if (result.json && result.json.ok) {
-          showSuccessScreen();
           form.reset();
           if (typeof gtag === 'function') gtag('event', 'generate_lead', { event_category: 'engagement', event_label: attribution.utm_source || 'direct' });
-          if (typeof fbq === 'function') fbq('track', 'Lead');
+          window.location.href = '/thank-you.html';
         } else {
           var errMsg = (result.json && result.json.error) || 'Something went wrong. Please WhatsApp us.';
           if ($formError) { $formError.textContent = errMsg; $formError.style.display = 'block'; }
