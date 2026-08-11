@@ -85,8 +85,9 @@ async function sendToCrm(row) {
       return { ok: false, reason: 'HTTP ' + crmRes.status };
     }
 
-    console.log('[crm] ✅ lead delivered');
-    return { ok: true };
+    const successBody = await crmRes.text().catch(() => '');
+    console.log('[crm] ✅ lead delivered — status:', crmRes.status, 'body:', successBody);
+    return { ok: true, responseBody: successBody };
   } catch (err) {
     clearTimeout(timeoutId);
     const reason = err && err.name === 'AbortError' ? 'timeout' : (err && err.message) || 'unknown';
@@ -247,6 +248,7 @@ export default async function handler(req, res) {
     // user-facing response must not claim success, since CRM is where the
     // sales team actually sees the lead.
     const crmResult = await sendToCrm(row);
+    console.log('[lead] CRM call completed, ok:', crmResult.ok);
 
     if (!crmResult.ok) {
       console.error('[lead] CRM delivery failed, blocking success response', {
