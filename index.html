@@ -1354,34 +1354,82 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             <input type="hidden" name="landing_page" id="landing_page">
             <input type="hidden" name="submitted_at" id="submitted_at">
 
-            <!-- STEP 1 — Eligibility check comes first. No name/mobile/email is
-                 requested until a qualified ₹5L+ range is selected. -->
+            <!-- STEP 1 — Contact details + OTP verification now come first,
+                 so a verified mobile number exists before any debt amount
+                 is selected. This is required for the server-side 30-day
+                 disqualification cooldown to have something to key on. -->
             <div class="field">
-              <label for="debtAmount">First, let's check if you qualify — Total Outstanding Debt</label>
-              <select id="debtAmount" name="debtAmount" required>
-                <option value="">Select your total outstanding debt</option>
-                <option value="below-2L">Below ₹2 Lakh</option>
-                <option value="2-4.99L">₹2 Lakh – ₹4.99 Lakh</option>
-                <option value="5-10L">₹5 Lakh – ₹10 Lakh</option>
-                <option value="10-25L">₹10 Lakh – ₹25 Lakh</option>
-                <option value="above-25L">₹25 Lakh+</option>
-              </select>
-              <p style="font-size:12.5px;color:var(--ivory-dim);margin-top:6px;">GrowScore currently works with individuals who have ₹5 lakh or more in total outstanding debt.</p>
+              <label for="fullName">Full Name</label>
+              <input type="text" id="fullName" name="fullName" placeholder="Your full name" required>
+            </div>
+            <div class="field-row" style="align-items:flex-end;gap:10px;">
+              <div class="field" style="flex:1;">
+                <label for="mobile">Mobile Number</label>
+                <input type="tel" id="mobile" name="mobile" placeholder="10-digit number" pattern="[0-9]{10}" required>
+              </div>
+              <div class="field" style="flex:0 0 auto;">
+                <button type="button" id="sendOtpBtn" class="submit-btn" style="margin-top:0;padding:13px 20px;white-space:nowrap;">Verify</button>
+              </div>
             </div>
 
-            <!-- Disqualification message: shown only when a below-5L range is selected -->
+            <!-- OTP entry: hidden until Verify is clicked -->
+            <div id="inlineOtpPanel" style="display:none;">
+              <p class="otp-sub" style="margin-bottom:10px;">Enter the 6-digit code sent to <strong id="otpMobileDisplay"></strong></p>
+              <p class="otp-error" id="otpError" role="alert" aria-live="polite"></p>
+              <div class="otp-digits" role="group" aria-label="6-digit verification code" style="margin-bottom:10px;">
+                <input type="tel" inputmode="numeric" maxlength="6" id="otpSingleInput" class="otp-single-input" autocomplete="one-time-code" placeholder="Enter 6-digit OTP" style="width:100%;padding:14px;font-size:1.4rem;letter-spacing:8px;text-align:center;background:rgba(255,255,255,0.07);border:1.5px solid rgba(63,216,238,0.3);border-radius:10px;color:#fff;outline:none;" aria-label="6-digit OTP code">
+              </div>
+              <div class="otp-actions" style="margin-bottom:10px;">
+                <button type="button" class="otp-change-number" id="otpChangeNumber">Change number</button>
+                <button type="button" class="otp-resend" id="otpResend" disabled>Resend in <span id="otpResendTimer">45</span>s</button>
+              </div>
+              <button type="button" class="submit-btn" id="otpVerifyBtn" style="margin-bottom:8px;">Confirm OTP ✓</button>
+            </div>
+
+            <!-- Verified badge: shown after OTP confirmed -->
+            <div id="mobileVerifiedBadge" style="display:none;color:#34d399;font-size:13px;margin-bottom:14px;">✅ Mobile number verified</div>
+
+            <!-- Brief loading state while the server-side cooldown check runs -->
+            <div id="eligibilityCheckingMsg" style="display:none;color:var(--ivory-dim);font-size:13px;margin-bottom:14px;">Checking eligibility…</div>
+
+            <!-- STEP 2 — Debt amount question. Hidden until OTP is verified
+                 AND the server confirms this mobile number has no active
+                 30-day disqualification cooldown. -->
+            <div id="eligibilityQuestionWrap" style="display:none;">
+              <div class="field">
+                <label for="debtAmount">First, let's check if you qualify — Total Outstanding Debt</label>
+                <select id="debtAmount" name="debtAmount" required>
+                  <option value="">Select your total outstanding debt</option>
+                  <option value="below-2L">Below ₹2 Lakh</option>
+                  <option value="2-4.99L">₹2 Lakh – ₹4.99 Lakh</option>
+                  <option value="5-10L">₹5 Lakh – ₹10 Lakh</option>
+                  <option value="10-25L">₹10 Lakh – ₹25 Lakh</option>
+                  <option value="above-25L">₹25 Lakh+</option>
+                </select>
+                <p style="font-size:12.5px;color:var(--ivory-dim);margin-top:6px;">GrowScore currently works with individuals who have ₹5 lakh or more in total outstanding debt.</p>
+              </div>
+            </div>
+
+            <!-- Disqualification message — shown either for a fresh below-5L
+                 selection, or immediately on return visits while a 30-day
+                 cooldown is still active for this verified mobile number. -->
             <div id="disqualifiedMsg" style="display:none;background:rgba(255,128,128,0.08);border:1px solid rgba(255,128,128,0.25);border-radius:10px;padding:16px;margin-bottom:14px;">
+              <h4 style="font-family:var(--serif);font-size:17px;font-weight:600;color:var(--ivory);margin-bottom:10px;">Not Eligible at This Time</h4>
               <p style="font-size:13.5px;line-height:1.6;color:var(--ivory-dim);margin-bottom:10px;">
-                Thank you for your interest in GrowScore. Our current program is designed for individuals with ₹5 lakh or more in total outstanding debt.
+                Our current debt management program is designed for individuals with ₹5 lakh or more in total outstanding debt.
               </p>
-              <p style="font-size:13px;line-height:1.6;color:var(--ivory-dim);margin-bottom:14px;">
-                You previously selected an amount below ₹5 lakh. If that was a mistake, you can check your eligibility again.
+              <p style="font-size:13.5px;line-height:1.6;color:var(--ivory-dim);margin-bottom:10px;">
+                Based on the amount entered, you don't currently meet our eligibility criteria.
               </p>
+              <p style="font-size:13.5px;line-height:1.6;color:var(--ivory-dim);margin-bottom:14px;">
+                You can check your eligibility again after 30 days if your financial situation changes.
+              </p>
+              <p style="font-size:12.5px;color:var(--ivory-dim);margin-bottom:14px;">Thank you for your interest in Grow Score.</p>
               <button type="button" id="disqCheckAgainBtn" class="submit-btn" style="margin-top:0;margin-bottom:10px;">Check Again →</button>
               <button type="button" id="disqGoBackBtn" class="submit-btn" style="background:transparent;border:1px solid rgba(159,184,194,0.3);color:#fff;margin-top:0;">Go Back</button>
             </div>
 
-            <!-- STEP 2 onward — only revealed once a qualified ₹5L+ range is chosen -->
+            <!-- STEP 3 — only revealed once a qualified ₹5L+ range is chosen -->
             <div id="qualifiedFields" style="display:none;">
               <div class="field">
                 <label>Type of Debt</label>
@@ -1431,38 +1479,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
                 </select>
               </div>
 
-              <div class="field">
-                <label for="fullName">Full Name</label>
-                <input type="text" id="fullName" name="fullName" placeholder="Your full name" required>
-              </div>
-              <div class="field-row" style="align-items:flex-end;gap:10px;">
-                <div class="field" style="flex:1;">
-                  <label for="mobile">Mobile Number</label>
-                  <input type="tel" id="mobile" name="mobile" placeholder="10-digit number" pattern="[0-9]{10}" required>
-                </div>
-                <div class="field" style="flex:0 0 auto;">
-                  <button type="button" id="sendOtpBtn" class="submit-btn" style="margin-top:0;padding:13px 20px;white-space:nowrap;">Verify</button>
-                </div>
-              </div>
-
-              <!-- OTP entry: hidden until Verify is clicked -->
-              <div id="inlineOtpPanel" style="display:none;">
-                <p class="otp-sub" style="margin-bottom:10px;">Enter the 6-digit code sent to <strong id="otpMobileDisplay"></strong></p>
-                <p class="otp-error" id="otpError" role="alert" aria-live="polite"></p>
-                <div class="otp-digits" role="group" aria-label="6-digit verification code" style="margin-bottom:10px;">
-                  <input type="tel" inputmode="numeric" maxlength="6" id="otpSingleInput" class="otp-single-input" autocomplete="one-time-code" placeholder="Enter 6-digit OTP" style="width:100%;padding:14px;font-size:1.4rem;letter-spacing:8px;text-align:center;background:rgba(255,255,255,0.07);border:1.5px solid rgba(63,216,238,0.3);border-radius:10px;color:#fff;outline:none;" aria-label="6-digit OTP code">
-                </div>
-                <div class="otp-actions" style="margin-bottom:10px;">
-                  <button type="button" class="otp-change-number" id="otpChangeNumber">Change number</button>
-                  <button type="button" class="otp-resend" id="otpResend" disabled>Resend in <span id="otpResendTimer">45</span>s</button>
-                </div>
-                <button type="button" class="submit-btn" id="otpVerifyBtn" style="margin-bottom:8px;">Confirm OTP ✓</button>
-              </div>
-
-              <!-- Verified badge: shown after OTP confirmed -->
-              <div id="mobileVerifiedBadge" style="display:none;color:#34d399;font-size:13px;margin-bottom:14px;">✅ Mobile number verified</div>
-
-              <!-- Remaining fields: locked until OTP verified -->
+              <!-- Remaining fields: kept as its own wrapper for existing OTP JS compatibility (it toggles this element's opacity/pointer-events on verify) -->
               <div id="remainingFields" style="opacity:0.35;pointer-events:none;">
                 <div class="field">
                   <label for="city">City</label>
@@ -2279,8 +2296,12 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         if ($otpPanel) $otpPanel.style.display = 'none';
         if ($badge) $badge.style.display = 'block';
         if ($fields) { $fields.style.opacity = '1'; $fields.style.pointerEvents = 'auto'; }
-        var city = document.getElementById('city');
-        if (city) setTimeout(function() { city.focus(); }, 100);
+        // Server-side 30-day cooldown check — the debt-amount question is
+        // only revealed once this confirms the mobile number isn't under
+        // an active disqualification cooldown. See checkEligibilityCooldown().
+        if (typeof window.__gsCheckEligibilityCooldown === 'function') {
+          window.__gsCheckEligibilityCooldown($mobile ? $mobile.value.trim() : '');
+        }
       }).catch(function(err) {
         console.error('[OTP confirm error]', err.code, err.message);
         // Reset digits and verifier so resend works cleanly
@@ -2427,24 +2448,95 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     });
   }
 
-  // ── Eligibility gate: show/hide qualified fields & disqualification message ──
+  // ── Eligibility gate: cooldown check, show/hide qualified fields & disqualification message ──
   (function() {
-    var debtAmountEl     = document.getElementById('debtAmount');
-    var disqMsgEl        = document.getElementById('disqualifiedMsg');
-    var qualifiedEl      = document.getElementById('qualifiedFields');
+    var debtAmountEl      = document.getElementById('debtAmount');
+    var disqMsgEl         = document.getElementById('disqualifiedMsg');
+    var qualifiedEl       = document.getElementById('qualifiedFields');
+    var eligibilityWrapEl = document.getElementById('eligibilityQuestionWrap');
+    var checkingMsgEl     = document.getElementById('eligibilityCheckingMsg');
     var disqCheckAgainBtn = document.getElementById('disqCheckAgainBtn');
-    var disqGoBackBtn    = document.getElementById('disqGoBackBtn');
+    var disqGoBackBtn     = document.getElementById('disqGoBackBtn');
     var DISQ = ['below-2L', '2-4.99L'];
+    var currentMobile = '';
 
     if (!debtAmountEl) return;
+
+    function showNotEligible() {
+      if (eligibilityWrapEl) eligibilityWrapEl.style.display = 'none';
+      if (qualifiedEl) qualifiedEl.style.display = 'none';
+      if (disqMsgEl) disqMsgEl.style.display = 'block';
+    }
+
+    function showEligibilityQuestion() {
+      if (disqMsgEl) disqMsgEl.style.display = 'none';
+      if (eligibilityWrapEl) eligibilityWrapEl.style.display = 'block';
+    }
+
+    // Server-side cooldown check — called right after OTP verification.
+    // Backend is the sole source of truth for whether this verified mobile
+    // number is under an active 30-day disqualification cooldown; nothing
+    // here is trusted client-side.
+    window.__gsCheckEligibilityCooldown = function(mobile) {
+      if (!mobile) { showEligibilityQuestion(); return; }
+      currentMobile = mobile;
+
+      if (checkingMsgEl) checkingMsgEl.style.display = 'block';
+      if (eligibilityWrapEl) eligibilityWrapEl.style.display = 'none';
+      if (disqMsgEl) disqMsgEl.style.display = 'none';
+
+      fetch('/api/check-eligibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile: mobile })
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(result) {
+        if (checkingMsgEl) checkingMsgEl.style.display = 'none';
+        if (result && result.blocked) {
+          showNotEligible();
+        } else {
+          showEligibilityQuestion();
+        }
+      })
+      .catch(function(err) {
+        console.error('[eligibility check error]', err);
+        if (checkingMsgEl) checkingMsgEl.style.display = 'none';
+        // Fail open to the question rather than trapping a genuine user on
+        // a network hiccup — the backend independently re-validates any
+        // qualified submission before it ever reaches Supabase/Sheets/CRM,
+        // so this is not a security-relevant fallback.
+        showEligibilityQuestion();
+      });
+    };
 
     function updateEligibility() {
       var val = debtAmountEl.value;
       var isDisq = DISQ.indexOf(val) !== -1;
       var isQualified = val && !isDisq;
 
-      if (disqMsgEl)   disqMsgEl.style.display   = isDisq ? 'block' : 'none';
-      if (qualifiedEl) qualifiedEl.style.display = isQualified ? 'block' : 'none';
+      if (isDisq) {
+        // Record the disqualification + 30-day cooldown server-side before
+        // showing the message. Fire-and-forget from the UI's perspective —
+        // the message shows regardless, since the backend is authoritative
+        // either way (a failed write here does not let anyone through, as
+        // api/lead.js independently re-checks the cooldown on submission).
+        if (currentMobile) {
+          fetch('/api/record-disqualification', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mobile: currentMobile })
+          }).catch(function(err) {
+            console.error('[record disqualification error]', err);
+          });
+        }
+        showNotEligible();
+      } else if (isQualified) {
+        if (disqMsgEl) disqMsgEl.style.display = 'none';
+        if (qualifiedEl) qualifiedEl.style.display = 'block';
+      } else {
+        if (qualifiedEl) qualifiedEl.style.display = 'none';
+      }
 
       var submitBtn = document.getElementById('formSubmitBtn');
       if (submitBtn) submitBtn.style.display = isDisq ? 'none' : '';
@@ -2458,16 +2550,19 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
     debtAmountEl.addEventListener('change', updateEligibility);
 
-    // "Check Again →" — soft recovery from an accidental below-₹5L selection.
-    // Reopens the eligibility question so the user can pick ₹5L+ if that
-    // was a mistake. No localStorage, no lock — purely resets the select
-    // so updateEligibility() shows the question again.
+    // "Check Again →" — re-runs the server-side cooldown check. If the
+    // disqualification was just recorded this session, the backend will
+    // correctly show Not Eligible again (the cooldown is now active). If
+    // the user is a fresh visitor who hasn't been disqualified, this simply
+    // reopens the question. No localStorage, no client-side lock.
     if (disqCheckAgainBtn) {
       disqCheckAgainBtn.addEventListener('click', function() {
-        debtAmountEl.value = '';
-        updateEligibility();
-        debtAmountEl.focus();
-        debtAmountEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (currentMobile && typeof window.__gsCheckEligibilityCooldown === 'function') {
+          window.__gsCheckEligibilityCooldown(currentMobile);
+        } else {
+          debtAmountEl.value = '';
+          showEligibilityQuestion();
+        }
       });
     }
 
