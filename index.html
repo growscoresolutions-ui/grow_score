@@ -1968,8 +1968,9 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   // of relying only on native anchor-jump + CSS scroll-behavior, since some
   // mobile browsers/webviews handle in-page hash navigation inconsistently.
   // It does NOT submit anything, trigger qualification logic, reset any
-  // field, or navigate away — purely a scroll action. The href stays in
-  // place as a no-JS fallback.
+  // field, or navigate away — purely a scroll action, followed by focusing
+  // the existing debt dropdown (no option is selected automatically).
+  // The href stays in place as a no-JS fallback.
   (function(){
     var eligibilityCard = document.getElementById('consult-form');
     if (!eligibilityCard) return;
@@ -1979,6 +1980,23 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       link.addEventListener('click', function(e){
         e.preventDefault();
         eligibilityCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        // Focus the existing debt dropdown once the smooth scroll has
+        // settled, so both the heading and the dropdown remain visible
+        // exactly where scrollIntoView positioned them. preventScroll
+        // stops the browser from re-scrolling the field into view on
+        // focus (which could undo the positioning above). This only
+        // focuses the field — it never sets or changes its value.
+        setTimeout(function(){
+          var debtAmountEl = document.getElementById('debtAmount');
+          if (debtAmountEl) {
+            try {
+              debtAmountEl.focus({ preventScroll: true });
+            } catch (focusErr) {
+              debtAmountEl.focus();
+            }
+          }
+        }, 600);
       });
     });
   })();
