@@ -1960,6 +1960,29 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <script>
 (function(){
   'use strict';
+
+  // ---------- 0. "Check My Eligibility →" CTA smooth-scroll ----------
+  // All 5 CTAs (header, hero, pain section, final CTA, mobile sticky) share
+  // href="#consult-form" — the existing eligibility card's real ID. This
+  // handler intercepts the click and does an explicit scrollIntoView instead
+  // of relying only on native anchor-jump + CSS scroll-behavior, since some
+  // mobile browsers/webviews handle in-page hash navigation inconsistently.
+  // It does NOT submit anything, trigger qualification logic, reset any
+  // field, or navigate away — purely a scroll action. The href stays in
+  // place as a no-JS fallback.
+  (function(){
+    var eligibilityCard = document.getElementById('consult-form');
+    if (!eligibilityCard) return;
+
+    var ctaLinks = document.querySelectorAll('a[href="#consult-form"]');
+    ctaLinks.forEach(function(link){
+      link.addEventListener('click', function(e){
+        e.preventDefault();
+        eligibilityCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  })();
+
   // ---------- 1. UTM / click-id capture ----------
   // Reads from the current URL on first load, falls back to a value already
   // stored this session so attribution survives if the visitor lands on the
