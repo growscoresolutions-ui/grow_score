@@ -17,10 +17,22 @@ function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
+function normalizeMobile(raw) {
+  if (typeof raw !== 'string') return '';
+
+  let digits = raw.replace(/[^0-9]/g, '');
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  }
+
+  return digits;
+}
+
 function validatePayload(body) {
   const errors = [];
   if (!body.fullName || body.fullName.trim().length < 2) errors.push('fullName');
-  if (!body.mobile || !/^[0-9]{10}$/.test(body.mobile.trim())) errors.push('mobile');
+  if (!body.mobile || !/^[0-9]{10}$/.test(body.mobile)) errors.push('mobile');
   if (!body.city) errors.push('city');
   if (!body.debtAmount) errors.push('debtAmount');
   return errors;
@@ -125,6 +137,12 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
+    // Normalize mobile immediately — every downstream use (validation,
+    // duplicate check, cooldown lookup, row storage, CRM payload) reads
+    // from this same normalized body.mobile, so a single canonical value
+    // is used consistently everywhere in this handler.
+    body.mobile = normalizeMobile(body.mobile);
+
     // Honeypot — unchanged from original
     if (body['bot-field']) {
       return res.status(200).json({ ok: true });
@@ -158,12 +176,57 @@ export default async function handler(req, res) {
 
     // Duplicate-submission courtesy check — after qualification (no point
     // debouncing requests we'd reject anyway), before any writes.
-    const mobileTrimmed = body.mobile.trim();
+    const mobileTrimmed = body.mobile;
     if (isRecentDuplicate(mobileTrimmed)) {
       return res.status(200).json({
         ok: false,
         error: 'We already received your details. A debt expert will call you shortly.'
       });
+    }
+
+    // ── 30-DAY DISQUALIFICATION COOLDOWN — the real enforcement point ────
+    // The frontend already checks this after OTP verification and blocks
+    // the below-₹5L path from ever recording another submission, but that
+    // is a UX convenience, not security. This is the actual gate: even if
+    // someone bypasses the frontend entirely and POSTs directly here with
+    // a qualified debtAmount, a mobile number under an active cooldown is
+    // rejected before Supabase, Sheets, or CRM are ever touched.
+    try {
+      const { data: cooldownRow, error: cooldownErr } = await supabase
+        .from('eligibility_cooldowns')
+        .select('eligibility_status, disqualified_until')
+        .eq('mobile', mobileTrimmed)
+        .maybeSingle();
+
+      if (cooldownErr) {
+        console.error('[lead] cooldown lookup failed:', cooldownErr.message);
+        // Fail open on a lookup error rather than blocking a genuine
+        // qualified user due to an infrastructure hiccup — logged for
+        // investigation.
+      } else if (cooldownRow) {
+        const now = new Date();
+        const disqualifiedUntil = cooldownRow.disqualified_until ? new Date(cooldownRow.disqualified_until) : null;
+        const isActiveCooldown =
+          cooldownRow.eligibility_status === 'disqualified' &&
+          disqualifiedUntil &&
+          disqualifiedUntil > now;
+
+        if (isActiveCooldown) {
+          console.warn('[lead:rejected] active 30-day cooldown', {
+            mobile: mobileTrimmed.slice(0, 4) + '******',
+            disqualifiedUntil: disqualifiedUntil.toISOString(),
+            ts: now.toISOString()
+          });
+          return res.status(200).json({
+            ok: false,
+            qualified: false,
+            error: 'Based on the information provided, this program may not be right for you at this time.'
+          });
+        }
+      }
+    } catch (cooldownEx) {
+      console.error('[lead] cooldown check exception:', cooldownEx.message);
+      // Fail open — see reasoning above.
     }
 
     const row = {
